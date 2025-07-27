@@ -1,16 +1,22 @@
+// src/app/api/products/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllProducts, addProduct, Product } from '@/lib/mock-db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from "@/lib/authOptions";
+import prisma from '@/lib/db'; // Impor Prisma Client
 
 // GET: Mengambil semua produk (Bisa diakses siapa saja)
 export async function GET() {
-  const products = getAllProducts();
-  return NextResponse.json({
-    status: 'success',
-    message: 'Products fetched successfully',
-    data: products
-  }, { status: 200 });
+  try {
+    const products = await prisma.product.findMany();
+    return NextResponse.json({
+      status: 'success',
+      message: 'Products fetched successfully',
+      data: products
+    }, { status: 200 });
+  } catch (error) {
+    console.error("Error fetching products:", error);
+    return NextResponse.json({ status: 'error', message: 'Internal server error', details: (error as Error).message }, { status: 500 });
+  }
 }
 
 // POST: Menambahkan produk baru (Hanya Admin)
@@ -34,13 +40,19 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const newProduct: Omit<Product, 'id'> = { name, description, price, imageUrl };
-    const addedProduct = addProduct(newProduct);
+    const newProduct = await prisma.product.create({
+      data: {
+        name,
+        description,
+        price,
+        imageUrl,
+      },
+    });
 
     return NextResponse.json({
       status: 'success',
       message: 'Product added successfully',
-      data: addedProduct
+      data: newProduct
     }, { status: 201 });
   } catch (error) {
     console.error("Error adding product:", error);

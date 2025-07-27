@@ -3,10 +3,20 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
-import { Product } from "@/lib/mock-db";
+import { Product } from '@prisma/client';
 import Link from "next/link";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { getCart, saveCart, CartItem } from '@/lib/cart-storage';
+
+interface CartItemDisplay {
+  id: string; // Ini adalah productId
+  cartItemId: string; // Ini adalah ID dari entri CartItem di database
+  name: string;
+  description: string;
+  price: number;
+  imageUrl: string;
+  quantity: number;
+}
+
 
 export default function ProductDetailPage() {
   const params = useParams();
@@ -16,6 +26,7 @@ export default function ProductDetailPage() {
   const [isLoadingProduct, setIsLoadingProduct] = useState(true);
   const [quantity, setQuantity] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false); // Tambahkan state untuk error message
 
   const { user, isAdmin, isAuthenticated, isLoading: isLoadingUser } = useCurrentUser();
   const userId = user?.id;
@@ -28,14 +39,18 @@ export default function ProductDetailPage() {
           const res = await fetch(`/api/products/${productId}`);
           if (!res.ok) {
             console.error(`Failed to fetch product with ID ${productId}:`, res.statusText);
-            router.push("/not-found");
+            if (res.status === 404) {
+              router.push("/not-found");
+            } else {
+                setMessage("Failed to load product. Please try again.");
+                setIsError(true);
+            }
             return;
           }
           const responseData = await res.json();
           if (responseData.status === 'success' && responseData.data) {
             setProduct(responseData.data);
           } else {
-            // Jika status bukan success atau tidak ada data
             throw new Error(responseData.message || "Failed to get product data.");
           }
         } catch (error) {
@@ -49,34 +64,58 @@ export default function ProductDetailPage() {
     }
   }, [productId, router]);
 
-  const handleAddToCart = () => {
-    // Pastikan user terautentikasi dan memiliki userId sebelum menambahkan ke keranjang
+  const handleAddToCart = async () => {
     if (!isAuthenticated || !userId) {
       router.push('/auth/signin');
       return;
     }
 
-    if (product) {
-      const currentCart = getCart(userId); // Menggunakan userId dari sesi
-      const existingItem = currentCart.find(item => item.id === product.id);
+    if (!product) { // Pastikan produk sudah terload
+        setMessage("Product data not available to add to cart.");
+        setIsError(true);
+        return;
+    }
 
-      let updatedCart: CartItem[];
-      if (existingItem) {
-        updatedCart = currentCart.map(item =>
-          item.id === product.id ? { ...item, quantity: item.quantity + quantity } : item
-        );
-      } else {
-        updatedCart = [...currentCart, { ...product, quantity: quantity }];
-      }
-      saveCart(userId, updatedCart); // Menyimpan dengan userId
-      setMessage(`${quantity} ${product.name} added to cart!`);
-      setTimeout(() => setMessage(null), 3000);
+    setMessage(null); // Reset pesan
+    setIsError(false);
+
+    try {
+        const res = await fetch('/api/cart', { // <--- Panggil API cart POST
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                productId: product.id,
+                quantity: quantity,
+            }),
+        });
+
+        const responseData = await res.json();
+
+        if (res.ok && responseData.status === 'success') {
+            setMessage(`${quantity} ${product.name} added to cart!`);
+            setIsError(false);
+            setQuantity(1); // Reset quantity setelah berhasil
+        } else {
+            setMessage(responseData.message || "Failed to add product to cart.");
+            setIsError(true);
+        }
+    } catch (error) {
+        console.error("Error adding to cart:", error);
+        setMessage("An unexpected error occurred while adding to cart.");
+        setIsError(true);
+    } finally {
+        setTimeout(() => {
+            setMessage(null);
+            setIsError(false);
+        }, 3000);
     }
   };
 
   const handleEditProduct = () => {
     if (isAdmin) {
-        router.push(`/products?edit=${productId}`);
+      router.push(`/products?edit=${productId}`);
     }
   };
 
@@ -90,9 +129,9 @@ export default function ProductDetailPage() {
 
   if (!product) {
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="min-h-screen flex items-center justify-center flex-col bg-gray-100">
             <p className="text-xl">Product not found.</p>
-            <Link href="/dashboard" className="text-blue-500 hover:underline ml-4">
+            <Link href="/dashboard" className="text-blue-500 hover:underline mt-4">
               ← Back to Products
             </Link>
         </div>
@@ -104,7 +143,7 @@ export default function ProductDetailPage() {
       <div className="bg-white rounded-lg shadow-md p-6 flex flex-col md:flex-row items-center md:items-start gap-8">
         <div className="md:w-1/2">
           <Image
-            src={product.imageUrl}
+            src={product.imageUrl || '/default-product.png'}
             alt={product.name}
             width={600}
             height={450}
@@ -154,7 +193,7 @@ export default function ProductDetailPage() {
           )}
 
           {message && (
-            <p className="mt-4 text-green-600 font-medium">{message}</p>
+            <p className={`mt-4 font-medium ${isError ? "text-red-600" : "text-green-600"}`}>{message}</p>
           )}
 
           <div className="mt-8">

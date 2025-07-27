@@ -1,4 +1,6 @@
-import { Product } from "./mock-db";
+// Sudah tidak digunakan karena sudah menggunakan neon - postgre tetapi file tidak dihapus agar 
+// dapat digunakan jika ingin mengubahnya kembali menjadi menggunakan penyimpanan local
+import { Product } from '@prisma/client';
 
 export interface CartItem extends Product {
   quantity: number;

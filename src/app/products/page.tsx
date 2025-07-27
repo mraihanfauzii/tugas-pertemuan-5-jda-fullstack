@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Product, findProductById } from "@/lib/mock-db";
+import { Product } from '@prisma/client';
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -18,50 +18,68 @@ export default function ProductManagementPage() {
   });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
 
-  const { isAdmin, isLoading, isUnauthenticated } = useCurrentUser(); // Gunakan hook
+  const { isAdmin, isLoading: isAuthLoading, isUnauthenticated } = useCurrentUser();
   const router = useRouter();
-  const searchParams = useSearchParams(); // Dapatkan query params
+  const searchParams = useSearchParams();
 
+  // Effect untuk otentikasi dan redirect
   useEffect(() => {
-    // Redirect jika bukan admin atau belum login
-    if (!isLoading) {
+    if (!isAuthLoading) {
       if (isUnauthenticated) {
         router.push("/auth/signin");
         return;
       }
       if (!isAdmin) {
-        // Redirect non-admin ke dashboard atau halaman 403 (Forbidden)
-        router.push("/dashboard"); // Atau router.push('/403-forbidden') jika ada
+        router.push("/dashboard"); // Redirect non-admin
         return;
       }
+      // Jika sudah diautentikasi sebagai admin, baru fetch products
+      fetchProducts();
     }
-    fetchProducts();
+  }, [isAdmin, isAuthLoading, isUnauthenticated, router]);
 
-    // Cek jika ada query param 'edit'
+  // Effect untuk penanganan query param 'edit'
+  useEffect(() => {
     const editProductId = searchParams.get('edit');
-    if (editProductId) {
-        const productToEdit = findProductById(editProductId);
-        if (productToEdit) {
-            handleEdit(productToEdit);
-        } else {
-            setError("Product not found for editing.");
-        }
+    if (editProductId && products.length > 0) { // Pastikan products sudah terload
+      const productToEdit = products.find(p => p.id === editProductId); // Cari di array products
+      if (productToEdit) {
+        handleEdit(productToEdit);
+      } else {
+        setError("Product not found for editing.");
+        router.replace('/products'); // Hapus query param yang salah
+      }
     }
-  }, [isAdmin, isLoading, isUnauthenticated, router, searchParams]); // Tambahkan searchParams sebagai dependency
+  }, [searchParams, products]); // Tambahkan products sebagai dependency
 
   const fetchProducts = async () => {
+    setIsLoadingProducts(true); // Set loading true saat mulai fetch
     try {
       const res = await fetch("/api/products");
       if (res.ok) {
-        const data: Product[] = await res.json();
-        setProducts(data);
+        const result = await res.json();
+        // Perbaikan utama: Pastikan data yang di-set adalah array produk
+        if (result.status === "success" && Array.isArray(result.data)) {
+          setProducts(result.data);
+        } else {
+          // Handle case where API returns success but data is not an array
+          console.error("API response data is not an array:", result);
+          setError("Failed to fetch products: Unexpected data format.");
+          setProducts([]); // Pastikan products adalah array kosong
+        }
       } else {
-        setError("Failed to fetch products.");
+        const errorData = await res.json();
+        setError(errorData.message || "Failed to fetch products.");
+        setProducts([]); // Pastikan products adalah array kosong
       }
     } catch (err) {
       console.error("Fetch products error:", err);
       setError("An error occurred while fetching products.");
+      setProducts([]); // Pastikan products adalah array kosong
+    } finally {
+      setIsLoadingProducts(false); // Set loading false setelah selesai fetch
     }
   };
 
@@ -84,14 +102,14 @@ export default function ProductManagementPage() {
       return;
     }
     if (!productData.name || !productData.description || !productData.imageUrl) {
-        setError("All fields (Name, Description, Price, Image URL) are required.");
-        return;
+      setError("All fields (Name, Description, Price, Image URL) are required.");
+      return;
     }
 
     try {
       const method = editingProduct ? "PUT" : "POST";
       const url = editingProduct ? `/api/products/${editingProduct.id}` : "/api/products";
-      
+
       const res = await fetch(url, {
         method: method,
         headers: {
@@ -105,8 +123,8 @@ export default function ProductManagementPage() {
         setFormData({ name: "", description: "", price: "", imageUrl: "" });
         setEditingProduct(null);
         setShowForm(false);
-        fetchProducts();
-        router.replace('/products'); // Hapus query param 'edit' dari URL
+        fetchProducts(); // Refresh daftar produk
+        router.replace('/products'); // Hapus query param 'edit'
       } else {
         const data = await res.json();
         setError(data.message || `Failed to ${editingProduct ? "update" : "add"} product.`);
@@ -142,7 +160,7 @@ export default function ProductManagementPage() {
 
       if (res.ok) {
         setMessage("Product deleted successfully!");
-        fetchProducts();
+        fetchProducts(); // Refresh daftar produk
       } else {
         const data = await res.json();
         setError(data.message || "Failed to delete product.");
@@ -157,14 +175,14 @@ export default function ProductManagementPage() {
     setEditingProduct(null);
     setFormData({ name: "", description: "", price: "", imageUrl: "" });
     setShowForm(false);
-    router.replace('/products'); // Hapus query param 'edit' dari URL
+    router.replace('/products'); // Hapus query param 'edit'
   };
 
-  // Tampilkan loading/redirect jika status belum jelas atau tidak admin
-  if (isLoading || isUnauthenticated || !isAdmin) {
+  // Tampilkan loading/redirect jika status otentikasi belum jelas atau bukan admin
+  if (isAuthLoading || (isAuthLoading === false && (isUnauthenticated || !isAdmin))) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-xl">Loading...</p>
+        <p className="text-xl">Loading or redirecting...</p>
       </div>
     );
   }
@@ -267,7 +285,9 @@ export default function ProductManagementPage() {
         </div>
       )}
 
-      {products.length === 0 ? (
+      {isLoadingProducts ? ( // Tampilkan loading state untuk produk
+        <p className="text-center text-gray-600 text-xl">Loading products...</p>
+      ) : products.length === 0 ? (
         <p className="text-center text-gray-600 text-xl">No products found. Add some!</p>
       ) : (
         <div className="bg-white rounded-lg shadow-md p-6">
@@ -298,7 +318,13 @@ export default function ProductManagementPage() {
                   <tr key={product.id}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{product.id}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                        <Image src={product.imageUrl} alt={product.name} width={60} height={60} className="object-cover rounded" />
+                      <Image
+                        src={product.imageUrl || '/default-product.png'} // Fallback gambar
+                        alt={product.name}
+                        width={60}
+                        height={60}
+                        className="object-cover rounded"
+                      />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {product.name}

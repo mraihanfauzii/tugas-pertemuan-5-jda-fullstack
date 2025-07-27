@@ -1,3 +1,5 @@
+// Sudah tidak digunakan karena sudah menggunakan neon - postgre tetapi file tidak dihapus agar 
+// dapat digunakan jika ingin mengubahnya kembali menjadi menggunakan penyimpanan local
 import bcrypt from 'bcryptjs';
 
 export type UserRole = 'user' | 'admin';
@@ -91,7 +93,6 @@ export const findProductById = (id: string): Product | undefined => mockProducts
 
 export const addProduct = (product: Omit<Product, 'id'>): Product => {
   const newProduct: Product = {
-    // ✅ PERBAIKAN: Konsistensi format ID
     id: String(nextProductId++),
     ...product
   };

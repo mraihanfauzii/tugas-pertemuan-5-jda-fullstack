@@ -1,15 +1,58 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getCart, saveCart, clearCart, CartItem } from '@/lib/cart-storage';
+
+interface CartItemDisplay {
+  id: string; // Ini adalah productId
+  cartItemId: string; // Ini adalah ID dari entri CartItem di database
+  name: string;
+  description: string;
+  price: number;
+  imageUrl: string;
+  quantity: number;
+}
 
 export default function CartPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [cartItems, setCartItems] = useState<CartItemDisplay[]>([]);
+  const [isLoadingCart, setIsLoadingCart] = useState(true); // State loading untuk keranjang
+  const [message, setMessage] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
+
   const userId = session?.user?.id;
+
+  // Fungsi untuk mengambil keranjang dari API
+  const fetchCart = useCallback(async () => {
+    if (!userId) {
+      setIsLoadingCart(false);
+      return;
+    }
+    setIsLoadingCart(true);
+    setMessage(null);
+    setIsError(false);
+    try {
+      const res = await fetch('/api/cart'); // Panggil API GET /api/cart
+      const responseData = await res.json();
+
+      if (res.ok && responseData.status === 'success') {
+        setCartItems(responseData.data);
+      } else {
+        setMessage(responseData.message || "Failed to load cart.");
+        setIsError(true);
+        setCartItems([]);
+      }
+    } catch (error) {
+      console.error("Error fetching cart:", error);
+      setMessage("An unexpected error occurred while loading cart.");
+      setIsError(true);
+      setCartItems([]);
+    } finally {
+      setIsLoadingCart(false);
+    }
+  }, [userId]); // userId sebagai dependency
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -17,11 +60,11 @@ export default function CartPage() {
       return;
     }
     if (status === "authenticated" && userId) {
-      setCartItems(getCart(userId)); // Muat keranjang berdasarkan userId
+      fetchCart(); // Muat keranjang dari API
     }
-  }, [status, router, userId]);
+  }, [status, router, userId, fetchCart]); // fetchCart sebagai dependency
 
-  if (status === "loading") {
+  if (status === "loading" || isLoadingCart) { // Gabungkan loading state
     return (
       <div className="flex justify-center items-center h-screen">
         <div className="text-xl font-semibold">Loading cart...</div>
@@ -29,7 +72,6 @@ export default function CartPage() {
     );
   }
 
-  // Pastikan hanya user yang authenticated yang bisa melihat cart
   if (status === "unauthenticated" || !userId) {
     return null; // Atau tampilkan pesan "Please login to view your cart"
   }
@@ -38,42 +80,126 @@ export default function CartPage() {
     return cartItems.reduce((total, item) => total + item.price * item.quantity, 0);
   };
 
-  const handleQuantityChange = (id: string, newQuantity: number) => {
-    let updatedCart: CartItem[];
-    if (newQuantity <= 0) {
-      updatedCart = cartItems.filter(item => item.id !== id);
-    } else {
-      updatedCart = cartItems.map(item =>
-        item.id === id ? { ...item, quantity: newQuantity } : item
-      );
-    }
-    setCartItems(updatedCart);
-    if (userId) {
-      saveCart(userId, updatedCart);
+  const handleQuantityChange = async (cartItemId: string, newQuantity: number) => {
+    setMessage(null);
+    setIsError(false);
+
+    if (newQuantity < 0) return; // Jangan izinkan kuantitas negatif
+
+    try {
+      const res = await fetch('/api/cart', { // <--- Panggil API PUT /api/cart
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cartItemId, quantity: newQuantity }),
+      });
+
+      const responseData = await res.json();
+
+      if (res.ok && responseData.status === 'success') {
+        fetchCart(); // Refresh keranjang setelah update
+        setMessage("Cart updated successfully!");
+        setIsError(false);
+      } else {
+        setMessage(responseData.message || "Failed to update cart quantity.");
+        setIsError(true);
+      }
+    } catch (error) {
+      console.error("Error updating cart quantity:", error);
+      setMessage("An unexpected error occurred while updating cart quantity.");
+      setIsError(true);
+    } finally {
+        setTimeout(() => {
+            setMessage(null);
+            setIsError(false);
+        }, 3000);
     }
   };
 
-  const handleRemoveItem = (id: string) => {
-    const updatedCart = cartItems.filter(item => item.id !== id);
-    setCartItems(updatedCart);
-    if (userId) {
-      saveCart(userId, updatedCart);
+  const handleRemoveItem = async (cartItemId: string) => {
+    setMessage(null);
+    setIsError(false);
+    if (!confirm("Are you sure you want to remove this item from your cart?")) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/cart', { // <--- Panggil API DELETE /api/cart
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cartItemId }), // Kirim cartItemId
+      });
+
+      const responseData = await res.json();
+
+      if (res.ok && responseData.status === 'success') {
+        fetchCart(); // Refresh keranjang setelah menghapus
+        setMessage("Item removed from cart!");
+        setIsError(false);
+      } else {
+        setMessage(responseData.message || "Failed to remove item from cart.");
+        setIsError(true);
+      }
+    } catch (error) {
+      console.error("Error removing item:", error);
+      setMessage("An unexpected error occurred while removing item.");
+      setIsError(true);
+    } finally {
+        setTimeout(() => {
+            setMessage(null);
+            setIsError(false);
+        }, 3000);
     }
   };
 
-  const handleCheckout = () => {
-    alert("Proceeding to checkout! (This is a mock checkout)");
-    if (userId) {
-      clearCart(userId);
-      setCartItems([]); // Kosongkan tampilan keranjang
+  const handleCheckout = async () => {
+    setMessage(null);
+    setIsError(false);
+    if (!confirm("Proceeding to checkout! (This is a mock checkout). Do you want to clear your cart?")) {
+      return;
     }
-    // Redirect to a confirmation page or home
-    router.push("/dashboard");
+
+    try {
+        const res = await fetch('/api/cart', { // <--- Panggil API DELETE /api/cart untuk clear all
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ clearAll: true }), // Kirim clearAll: true
+        });
+
+        const responseData = await res.json();
+
+        if (res.ok && responseData.status === 'success') {
+            setMessage("Checkout successful! Your cart has been cleared.");
+            setIsError(false);
+            setCartItems([]); // Kosongkan tampilan keranjang
+            router.push("/dashboard");
+        } else {
+            setMessage(responseData.message || "Failed to proceed to checkout and clear cart.");
+            setIsError(true);
+        }
+    } catch (error) {
+        console.error("Error during checkout:", error);
+        setMessage("An unexpected error occurred during checkout.");
+        setIsError(true);
+    } finally {
+        setTimeout(() => {
+            setMessage(null);
+            setIsError(false);
+        }, 3000);
+    }
   };
 
   return (
     <div className="container mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Your Shopping Cart</h1>
+      {message && (
+        <p className={`mb-4 font-medium ${isError ? "text-red-600" : "text-green-600"}`}>{message}</p>
+      )}
       {cartItems.length === 0 ? (
         <p className="text-gray-600">Your cart is empty.</p>
       ) : (
@@ -91,10 +217,10 @@ export default function CartPage() {
               </thead>
               <tbody className="text-gray-600 text-sm font-light">
                 {cartItems.map((item) => (
-                  <tr key={item.id} className="border-b border-gray-200 hover:bg-gray-50">
+                  <tr key={item.cartItemId} className="border-b border-gray-200 hover:bg-gray-50">
                     <td className="py-3 px-6 text-left whitespace-nowrap">
                       <div className="flex items-center">
-                        <img src={item.imageUrl} alt={item.name} className="w-16 h-16 object-cover rounded-md mr-4" />
+                        <img src={item.imageUrl || '/default-product.png'} alt={item.name} className="w-16 h-16 object-cover rounded-md mr-4" />
                         <span>{item.name}</span>
                       </div>
                     </td>
@@ -104,14 +230,14 @@ export default function CartPage() {
                         type="number"
                         min="1"
                         value={item.quantity}
-                        onChange={(e) => handleQuantityChange(item.id, parseInt(e.target.value))}
+                        onChange={(e) => handleQuantityChange(item.cartItemId, parseInt(e.target.value))}
                         className="w-16 text-center border rounded-md py-1"
                       />
                     </td>
                     <td className="py-3 px-6 text-center">Rp {(item.price * item.quantity).toLocaleString('id-ID')}</td>
                     <td className="py-3 px-6 text-center">
                       <button
-                        onClick={() => handleRemoveItem(item.id)}
+                        onClick={() => handleRemoveItem(item.cartItemId)}
                         className="bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 transition-colors"
                       >
                         Remove
